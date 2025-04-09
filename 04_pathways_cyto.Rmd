@@ -1,0 +1,268 @@
+---
+title: "04_pathway_cyto"
+output: html_document
+date: "2025-03-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include = TRUE, echo = TRUE, message = FALSE, cache=FALSE, warning=FALSE, error = TRUE)
+```
+
+```{r}
+library(mia)
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(readr)
+library(purrr)
+```
+
+```{r}
+# Define the data frame of individuals with at least one non-NA value of cytokine (no crp)
+
+  # Define the cytokines without the CRP 
+  cytokines_no_crp <- c("IL_1A", "IL_2RA", "IL_3", "IL_12_P40", "IL_16", "IL_18", 
+               "CTACK", "GROA", "HGF", "LIF", "MCP_3", "M_CSF", "MIF", 
+               "MIG", "B_NGF", "SCF", "SCGF_B", "SDF_1A", "TNF_B", 
+               "TRAIL", "IL_1B", "IL_1RA", "IL_2", "IL_4", "IL_5", 
+               "IL_6", "IL_7", "IL_8", "IL_9", "IL_10", "IL_12_P70", 
+               "IL_13", "IL_15", "IL_17", "EOTAXIN", "FGF_BASIC", 
+               "G_CSF", "GM_CSF", "IFN_G", "IP_10", "MCP_1_MCAF", 
+               "MIP_1A", "PDGF_BB", "MIP_1B", "RANTES", "TNF_A", "VEGF", "IFN_A2")
+
+   tse <- readRDS("tse_mgs-20241118_104759.rds") # Read TSE
+   col_data_df <- as.data.frame(colData(tse)) %>% filter(PROJECT == "FR02") # Remove FR07 
+
+  # Select individuals with at least one non-NA cytokine value
+    cytokines_df <- col_data_df [, cytokines_no_crp] 
+
+    cytokines_rownames <- cytokines_df %>% 
+    mutate(row_sum = (rowSums(cytokines_df, na.rm = TRUE))) %>%
+    filter(row_sum != 0) %>% 
+    rownames()
+  
+  # Subset tse by selected rownames and extract colData
+    tse_cyto_subset <- tse [,cytokines_rownames ]
+    cl_tse_cyto_subset <- as.data.frame(colData(tse_cyto_subset))
+
+  # Filter the colData; pregnant women, 1M antibiotics,  and low reads, and remove NA covars
+    cyto_data_rn <- cl_tse_cyto_subset %>%
+    filter((GRAVID == 1 | is.na(GRAVID)) & (BL_USE_RX_J01_1mo == 0) & (total_reads > 50000) & !is.na(CURR_SMOKE) & !is.na(PREVAL_DIAB) & !is.na(BMI) & !is.na(BL_AGE) & !is.na(MEN)) %>% 
+      rownames()
+    
+  # Subset tse by selected rownames and extract colData
+    tse_cyto <- tse[, cyto_data_rn]
+
+# Clean the colData
+
+  # Define selected cytokines 
+  cytokines <- c("IL_1A", "IL_2RA", "IL_3", "IL_12_P40", "IL_16", "IL_18", 
+               "CTACK", "GROA", "HGF", "LIF", "M_CSF", "MIF", 
+               "MIG", "B_NGF", "SCF", "SCGF_B", "SDF_1A", "TNF_B", 
+               "TRAIL", "IL_1B", "IL_1RA", "IL_2", "IL_4", "IL_5", 
+               "IL_6", "IL_7", "IL_8", "IL_9", "IL_10", "IL_12_P70", 
+               "IL_13", "IL_17", "EOTAXIN", "FGF_BASIC", 
+               "G_CSF", "GM_CSF", "IFN_G", "IP_10", "MCP_1_MCAF", 
+               "MIP_1A", "PDGF_BB", "MIP_1B", "RANTES", "TNF_A", "VEGF","CRP")
+  
+  # Select relevant variables 
+  coldata <- as.data.frame(colData(tse_cyto)) %>% select (FID, BL_AGE, MEN, BMI, CURR_SMOKE, PREVAL_DIAB, cytokines)
+
+  # For CRP, replace <0.1 values with min/2 (0.05) and empty strings by NAs
+  coldata$CRP <- ifelse(coldata$CRP == "<0.1", 0.05, coldata$CRP)
+  coldata$CRP <- as.numeric(coldata$CRP)
+  
+  # Update colData of tse_cyto to include the two new CRP values 
+  coldata_sel <- coldata %>% select (FID, BL_AGE, MEN, BMI, CURR_SMOKE, PREVAL_DIAB, cytokines)
+  coldata_sel[cytokines] <- log(coldata_sel[cytokines]) # log transform cytokines
+  coldata_sel[cytokines] <- scale(coldata_sel[cytokines]) # scale cytokines 
+  SummarizedExperiment::colData(tse_cyto) <- S4Vectors::DataFrame(coldata_sel) # update colData
+
+```
+
+```{r}
+# Functional pathways from metaCyc
+joined_pathabundance <- read_delim("C:/Users/hadiab/Documents/cytokines/joined_pathabundance.tsv", 
+                                   delim = "\t", escape_double = FALSE, trim_ws = TRUE)
+
+# Matching sampleID from functional data to metadata
+
+  # Rename 1st column name
+  tse_cyto_coldata <- as.data.frame(colData(tse_cyto))%>%
+                  tibble::rownames_to_column("Barcode")
+
+  # Get the column names (excluding the first one, which is probably the path/feature column)
+  sample_names <- colnames(joined_pathabundance)[-1]
+
+  # Clean sample names by removing after .R1
+  cleaned_sample_names <- gsub("\\.R1.*","", sample_names, perl = TRUE)
+
+  # Update the column names with the cleaned sample names
+  colnames(joined_pathabundance)[-1] <- cleaned_sample_names
+
+  # Find the intersection of sample names between the cleaned joined_path_abundance sample       names and FINRISK sample data
+  common_samples <- intersect(tse_cyto_coldata$Barcode, cleaned_sample_names)
+
+  # Subset the joined_pathabundance file to include only the common samples
+  joined_pathabundance <- joined_pathabundance %>%
+  select(all_of(c("Pathway", common_samples)))
+
+```
+
+```{r}
+# Filtering any pathways associated w/ species
+filter_sp <- joined_pathabundance %>% 
+  filter(rowSums(across(where(is.numeric)))!=0) %>%
+  # grep all Pathways that end with species
+  filter(grepl('.s__', Pathway))
+
+# Transpose dataframe
+filter_sp.t <- as.data.frame(t(filter_sp))
+
+# Take first row as colname
+colnames(filter_sp.t) <- filter_sp.t[1,]
+
+# Remove extra row
+filter_sp.t <- filter_sp.t[-1, ] 
+
+# Change from character to numeric
+filter_sp.t <- filter_sp.t %>% mutate_if(is.character, as.numeric) %>%
+  tibble::rownames_to_column("Barcode") 
+
+write_rds(filter_sp.t, "path.abund.t.rds")
+write_rds(filter_sp, "path.abund.rds")
+```
+
+
+
+```{r}
+# Prevalence filtering
+# You will get a dataframe of prevalent pathways
+filter_sp.10 <- filter_sp.t %>% 
+  select(-1) %>%
+  #mutate to 1 for everything > 0.0000000001
+  mutate(across(everything(), ~ . > 10^-10)) %>%
+  #get proportion
+  summarize(across(everything(), mean)) %>%
+  tidyr::gather(Pathway,prevalence) %>%
+  #filter for pathways that are prevalent in 10%
+  dplyr::filter(prevalence >0.1) 
+
+# Filtered to only prevalent pathways
+filter_sp_pr <- filter_sp.10 %>% 
+  select(-2) %>%
+  dplyr::inner_join(filter_sp, by="Pathway" ) %>%
+  t() %>%
+  as.data.frame()
+
+# Take first row as colname
+colnames(filter_sp_pr) <- filter_sp_pr[1,]
+# Remove extra row
+filter_sp_pr <- filter_sp_pr[-1, ] 
+# Change from character to numeric
+filter_sp_pr <- filter_sp_pr %>% mutate_if(is.character, as.numeric) %>%
+  tibble::rownames_to_column("Barcode") 
+```
+
+```{r}
+# Reduce to dichotomous variables (absence / presence)
+dicho <- filter_sp_pr %>% 
+  mutate(across(where(is.numeric), ~ ifelse(. > 0, 1, 0)))
+
+#Match samples with tse_cyto
+tse_cyto_coldata <- as.data.frame(colData(tse_cyto))%>%
+  tibble::rownames_to_column("Barcode")
+rm(tse_cyto)
+
+df_dicho <- dplyr::inner_join(dicho, tse_cyto_coldata, by = "Barcode")
+df_dicho$CURR_SMOKE <- factor(df_dicho$CURR_SMOKE)
+df_dicho$PREVAL_DIAB <- factor(df_dicho$PREVAL_DIAB)
+
+
+```
+
+```{r}
+#Run linear model using Dichotomised data 
+
+lm_possibly <- purrr::possibly(lm)
+cytokines <- c("IL_1A", "IL_2RA", "IL_3", "IL_12_P40", "IL_16", "IL_18", 
+               "CTACK", "GROA", "HGF", "LIF", "M_CSF", "MIF", 
+               "MIG", "B_NGF", "SCF", "SCGF_B", "SDF_1A", "TNF_B", 
+               "TRAIL", "IL_1B", "IL_1RA", "IL_2", "IL_4", "IL_5", 
+               "IL_6", "IL_7", "IL_8", "IL_9", "IL_10", "IL_12_P70", 
+               "IL_13", "IL_17", "EOTAXIN", "FGF_BASIC", 
+               "G_CSF", "GM_CSF", "IFN_G", "IP_10", "MCP_1_MCAF", 
+               "MIP_1A", "PDGF_BB", "MIP_1B", "RANTES", "TNF_A", "VEGF","CRP")
+
+Pathways <- colnames(df_dicho)
+Pathways <- Pathways [!Pathways %in% cytokines]
+Pathways <- Pathways [!Pathways %in% c( "FID", "BL_AGE", "MEN", "BMI", "CURR_SMOKE", "PREVAL_DIAB", "Barcode")]
+
+Pathway_fun_LM_dicho <- expand.grid(cytokines = cytokines, Pathways = Pathways)%>% 
+  mutate(formula = glue::glue("{cytokines} ~ scale(`{Pathways}`) + BL_AGE + MEN + BMI + CURR_SMOKE + PREVAL_DIAB")) %>%
+  mutate(model= map(formula, ~ lm_possibly( as.formula (.x), data=df_dicho))) %>%
+  filter(!is.null(model)) %>% 
+  mutate (tidy = map(model, ~ broom::tidy (.x))) %>% 
+  unnest (tidy) %>%
+  filter (grepl("scale", term)) %>% 
+  select (-model, -formula, -term) %>% 
+  mutate (qvalue = p.adjust(p.value, method = "BH"))  %>% 
+  arrange(qvalue)  
+
+
+saveRDS(Pathway_fun_LM_dicho, "Pathway_dicho_cyto.rds")
+
+writexl::write_xlsx(Pathway_fun_LM_dicho, "SupTable11_Pathway_dicho_cyto.xlsx")
+
+
+```
+
+```{r}
+# Transform to inverse_rank
+
+  # Define the transformation function
+  transform_column <- function(x) {
+  qnorm((rank(x, na.last = "keep") - 0.5) / sum(!is.na(x)))
+  }
+
+  # Apply the transformation to all columns
+  inv_rank <- filter_sp_pr
+  inv_rank[, -1] <- lapply(filter_sp_pr[, -1], transform_column)
+  
+  df_inv_rank <- dplyr::inner_join(inv_rank, tse_cyto_coldata, by = "Barcode")
+  df_inv_rank$CURR_SMOKE <- factor(df_inv_rank$CURR_SMOKE)
+  df_inv_rank$PREVAL_DIAB <- factor(df_inv_rank$PREVAL_DIAB)
+```
+  
+  
+```{r}
+# Run linear model using inverse_rank data
+lm_possibly <- purrr::possibly(lm)
+cytokines <- c("IL_1A", "IL_2RA", "IL_3", "IL_12_P40", "IL_16", "IL_18", 
+               "CTACK", "GROA", "HGF", "LIF", "M_CSF", "MIF", 
+               "MIG", "B_NGF", "SCF", "SCGF_B", "SDF_1A", "TNF_B", 
+               "TRAIL", "IL_1B", "IL_1RA", "IL_2", "IL_4", "IL_5", 
+               "IL_6", "IL_7", "IL_8", "IL_9", "IL_10", "IL_12_P70", 
+               "IL_13", "IL_17", "EOTAXIN", "FGF_BASIC", 
+               "G_CSF", "GM_CSF", "IFN_G", "IP_10", "MCP_1_MCAF", 
+               "MIP_1A", "PDGF_BB", "MIP_1B", "RANTES", "TNF_A", "VEGF","CRP")
+
+Pathways <- colnames(df_inv_rank)
+Pathways <- Pathways [!Pathways %in% cytokines]
+Pathways <- Pathways [!Pathways %in% c( "FID", "BL_AGE", "MEN", "BMI", "CURR_SMOKE", "PREVAL_DIAB", "Barcode")]
+
+Pathway_fun_LM_inv_rank <- expand.grid(cytokines = cytokines, Pathways = Pathways)%>% 
+  mutate(formula = glue::glue("{cytokines} ~ scale(`{Pathways}`) + BL_AGE + MEN + BMI + CURR_SMOKE + PREVAL_DIAB")) %>%
+  mutate(model= map(formula, ~ lm_possibly( as.formula (.x), data = df_inv_rank))) %>%
+  filter(!is.null(model)) %>% 
+  mutate (tidy = map(model, ~ broom::tidy (.x))) %>% 
+  unnest (tidy) %>%
+  filter (grepl("scale", term)) %>% 
+  select (-model, -formula, -term) %>% 
+  mutate (qvalue = p.adjust(p.value, method = "BH"))  %>% 
+  arrange(qvalue) 
+
+saveRDS(Pathway_fun_LM_inv_rank, "Pathway_inv_rank_cyto.rds")
+writexl::write_xlsx(Pathway_fun_LM_inv_rank, "SupTable12_Pathway_inv_rank_cyto.xlsx")
+```
+

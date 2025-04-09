@@ -1,0 +1,248 @@
+---
+title: "03_ancombc_cyto"
+output: html_document
+date: "2025-03-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include = TRUE, echo = TRUE, message = FALSE, cache=FALSE, warning=FALSE, error = TRUE)
+```
+
+```{r}
+library(mia)
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(ANCOMBC)
+```
+
+```{r}
+# Define the data frame of individuals with at least one non-NA value of cytokine (no crp)
+
+  # Define the cytokines without the CRP 
+  cytokines_no_crp <- c("IL_1A", "IL_2RA", "IL_3", "IL_12_P40", "IL_16", "IL_18", 
+               "CTACK", "GROA", "HGF", "LIF", "MCP_3", "M_CSF", "MIF", 
+               "MIG", "B_NGF", "SCF", "SCGF_B", "SDF_1A", "TNF_B", 
+               "TRAIL", "IL_1B", "IL_1RA", "IL_2", "IL_4", "IL_5", 
+               "IL_6", "IL_7", "IL_8", "IL_9", "IL_10", "IL_12_P70", 
+               "IL_13", "IL_15", "IL_17", "EOTAXIN", "FGF_BASIC", 
+               "G_CSF", "GM_CSF", "IFN_G", "IP_10", "MCP_1_MCAF", 
+               "MIP_1A", "PDGF_BB", "MIP_1B", "RANTES", "TNF_A", "VEGF", "IFN_A2")
+
+   tse <- readRDS("tse_mgs-20241118_104759.rds") # Read TSE
+   col_data_df <- as.data.frame(colData(tse)) %>% filter(PROJECT == "FR02") # Remove FR07 
+
+  # Select individuals with at least one non-NA cytokine value
+    cytokines_df <- col_data_df [, cytokines_no_crp] 
+
+    cytokines_rownames <- cytokines_df %>% 
+    mutate(row_sum = (rowSums(cytokines_df, na.rm = TRUE))) %>%
+    filter(row_sum != 0) %>% 
+    rownames()
+  
+  # Subset tse by selected rownames and extract colData
+    tse_cyto_subset <- tse [,cytokines_rownames ]
+    cl_tse_cyto_subset <- as.data.frame(colData(tse_cyto_subset))
+
+  # Filter the colData; pregnant women, 1M antibiotics,  and low reads, and remove NA covars
+    cyto_data_rn <- cl_tse_cyto_subset %>%
+    filter((GRAVID == 1 | is.na(GRAVID)) & (BL_USE_RX_J01_1mo == 0) & (total_reads > 50000) & !is.na(CURR_SMOKE) & !is.na(PREVAL_DIAB) & !is.na(BMI) & !is.na(BL_AGE) & !is.na(MEN)) %>% 
+      rownames()
+    
+  # Subset tse by selected rownames and extract colData
+    tse_cyto <- tse[, cyto_data_rn]
+
+# Clean the colData
+
+  # Define selected cytokines 
+  cytokines <- c("IL_1A", "IL_2RA", "IL_3", "IL_12_P40", "IL_16", "IL_18", 
+               "CTACK", "GROA", "HGF", "LIF", "M_CSF", "MIF", 
+               "MIG", "B_NGF", "SCF", "SCGF_B", "SDF_1A", "TNF_B", 
+               "TRAIL", "IL_1B", "IL_1RA", "IL_2", "IL_4", "IL_5", 
+               "IL_6", "IL_7", "IL_8", "IL_9", "IL_10", "IL_12_P70", 
+               "IL_13", "IL_17", "EOTAXIN", "FGF_BASIC", 
+               "G_CSF", "GM_CSF", "IFN_G", "IP_10", "MCP_1_MCAF", 
+               "MIP_1A", "PDGF_BB", "MIP_1B", "RANTES", "TNF_A", "VEGF","CRP")
+  
+  # Select relevant variables 
+  coldata <- as.data.frame(colData(tse_cyto)) %>% select (FID, BL_AGE, MEN, BMI, CURR_SMOKE, PREVAL_DIAB, cytokines)
+
+  # For CRP, replace <0.1 values with min/2 (0.05) and empty strings by NAs
+  coldata$CRP <- ifelse(coldata$CRP == "<0.1", 0.05, coldata$CRP)
+  coldata$CRP <- as.numeric(coldata$CRP)
+  
+  # Update colData of tse_cyto to include the two new CRP values 
+  coldata_sel <- coldata %>% select (FID, BL_AGE, MEN, BMI, CURR_SMOKE, PREVAL_DIAB, cytokines)
+  coldata_sel[cytokines] <- log(coldata_sel[cytokines]) # log transform cytokines
+  SummarizedExperiment::colData(tse_cyto) <- S4Vectors::DataFrame(coldata_sel) # update colData
+
+```
+
+Run ancombc2 at species-level
+```{r}
+# Transform count assay to relative abundances
+tse_cyto <- transformAssay(tse_cyto, assay.type = "counts", method = "relabundance")
+
+# Agglomerate by Species and subset by prevalence
+tse_cyto_sp <- subsetByPrevalentFeatures(tse_cyto, rank = "Species", assay.type = "relabundance", prevalence = 5/100, detection = 0.1/100)
+
+# Run ANCOMBC2 analysis
+
+results_list_ancombc2_all_cov_sp <- lapply(cytokines, function(cytokine) {
+    # Create the formula by pasting the current cytokine
+    fix_formula <- paste(cytokine, "+ BL_AGE + MEN + BMI + CURR_SMOKE + PREVAL_DIAB", sep = " ")
+    
+    # Run the ANCOMBC analysis
+    results <- ancombc2(
+        data = tse_cyto_sp,
+        assay.type = "counts",
+        fix_formula = fix_formula,
+        group = NULL,
+        alpha = 0.05
+    )
+    
+    return(results)  # Return the results for the current cytokine
+})
+# Name results lists with corresponding cytokines
+names(results_list_ancombc2_all_cov_sp) <- cytokines
+
+# Save results file 
+saveRDS(results_list_ancombc2_all_cov_sp, "results_list_ancombc2_all_cov_sp.rds")
+
+```
+
+Clean results
+```{r}
+# Clean results and do FDR correction 
+
+#results_list_ancombc2_all_cov_sp <- readRDS("results_list_ancombc2_all_cov_sp.rds")
+
+res_ancombc2_all_cov_sp <- lapply(cytokines, function(cytokine) {
+  # Extract the 'res' data frame from the corresponding list
+  results <- results_list_ancombc2_all_cov_sp[[which(cytokines == cytokine)]]
+  res_df <- results$res  
+  
+  # Select the relevant columns
+   selected_columns <- c("taxon", paste0("p_", cytokine), paste0("passed_ss_", cytokine),paste0("se_", cytokine), paste0("lfc_", cytokine))
+  res_df <- res_df[, names(res_df) %in% selected_columns, drop = FALSE]
+  
+  # Create column 'Cytokines' and move its p_values, passed_ss, se, and lfc to new columns
+  res_df <- res_df %>%
+    mutate(
+      Cytokines = cytokine,
+      passed_ss = .[[paste0("passed_ss_", cytokine)]], 
+      p_value = .[[paste0("p_", cytokine)]],
+      se = .[[paste0("se_", cytokine)]],
+      lfc = .[[paste0("lfc_", cytokine)]]
+      ) %>%
+    select(taxon, Cytokines, passed_ss, se, lfc, p_value)  
+    
+  
+  return(res_df)
+})
+
+# Assign names to the list based on the cytokines
+names(res_ancombc2_all_cov_sp) <- cytokines
+
+# Combine all data frames
+combined_res_ancombc_all_cov_sp<- do.call(rbind, res_ancombc2_all_cov_sp)
+rownames(combined_res_ancombc_all_cov_sp) <- NULL
+
+# Add q_vals 
+combined_res_ancombc_all_cov_sp <- combined_res_ancombc_all_cov_sp %>% mutate(q_val = p.adjust(p_value, "BH")) %>% arrange (q_val)
+
+# Save file
+saveRDS(combined_res_ancombc_all_cov_sp, "combined_res_ancombc_all_cov_sp.rds")
+
+DT::datatable(combined_res_ancombc_all_cov_sp)
+writexl::write_xlsx(combined_res_ancombc_all_cov_sp, "SupTable8_ancombc_sp.xlsx") 
+
+```
+
+Run ancombc2 at genus-level
+```{r}
+# ANCOMBC2 analysis
+
+# Agglomerate by genus and subset by prevalence
+tse_cyto_gn <- subsetByPrevalentFeatures(tse_cyto, rank = "Genus", assay.type = "relabundance", prevalence = 5/100, detection = 0.1/100)
+
+
+results_list_ancombc2_all_cov_gn <- lapply( cytokines, function(cytokine) {
+    # Create the formula by pasting the current cytokine
+    fix_formula <- paste(cytokine, "+ BL_AGE + MEN + BMI + CURR_SMOKE + PREVAL_DIAB", sep = " ")
+    
+    # Run the ANCOMBC analysis
+    results <- ancombc2(
+        data = tse_cyto_gn,
+        assay.type = "counts",
+        fix_formula = fix_formula,
+        group = NULL,
+        alpha = 0.05
+    )
+    
+    return(results)  # Return the results for the current cytokine
+})
+# Name results lists with corresponding cytokines
+names(results_list_ancombc2_all_cov_gn) <- cytokines
+
+# Save results file 
+saveRDS(results_list_ancombc2_all_cov_gn, "results_list_ancombc2_all_cov_gn.rds")
+
+```
+
+clean results
+```{r}
+# Clean results and do FDR correction
+#results_list_ancombc2_all_cov_gn <- readRDS("results_list_ancombc2_all_cov_gn.rds")
+res_ancombc2_all_cov_gn <- lapply(cytokines, function(cytokine) {
+  # Extract the 'res' data frame from the corresponding list
+  results <- results_list_ancombc2_all_cov_gn[[which(cytokines == cytokine)]]
+  res_df <- results$res  
+  
+  # Select the relevant columns
+  selected_columns <- c("taxon", paste0("p_", cytokine), paste0("passed_ss_", cytokine),paste0("se_", cytokine), paste0("lfc_", cytokine))
+  res_df <- res_df[, names(res_df) %in% selected_columns, drop = FALSE]
+  
+  # Create column 'Cytokines' and move its p_values, passed_ss, se, and lfc to new columns
+  res_df <- res_df %>%
+    mutate(
+      Cytokines = cytokine,
+      passed_ss = .[[paste0("passed_ss_", cytokine)]], 
+      p_value = .[[paste0("p_", cytokine)]],
+      se = .[[paste0("se_", cytokine)]],
+      lfc = .[[paste0("lfc_", cytokine)]]
+      ) %>%
+    select(taxon, Cytokines, passed_ss, se, lfc, p_value)  
+  
+  return(res_df)
+})
+
+# Assign names to the list based on the cytokines
+names(res_ancombc2_all_cov_gn) <- cytokines
+
+# Combine all data frames
+combined_res_ancombc_all_cov_gn <- do.call(rbind, res_ancombc2_all_cov_gn)
+rownames(combined_res_ancombc_all_cov_gn) <- NULL
+
+# Add q_vals 
+combined_res_ancombc_all_cov_gn <- combined_res_ancombc_all_cov_gn %>% mutate(q_val = p.adjust(p_value, "BH")) %>% arrange (q_val)
+
+# Save file
+saveRDS(combined_res_ancombc_all_cov_gn, "combined_res_ancombc_all_cov_gn.rds")
+writexl::write_xlsx(combined_res_ancombc_all_cov_gn, "SupTable10_ancombc_gn.xlsx" )
+DT::datatable(combined_res_ancombc_all_cov_gn)
+
+```
+
+
+Filter for q_val less than 0.05 and TRUE ss
+```{r}
+
+results_sp <- readRDS("combined_res_ancombc_all_cov_sp.rds")
+results_gn <- readRDS("combined_res_ancombc_all_cov_gn.rds")
+
+results_ancombc_sp <- results_sp %>% filter(q_val < 0.05 & passed_ss == TRUE)
+results_ancombc_gn <- results_gn %>% filter(q_val < 0.05 & passed_ss == TRUE)
+```
+
+

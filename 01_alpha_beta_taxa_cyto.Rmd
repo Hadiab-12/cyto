@@ -1,0 +1,528 @@
+---
+title: "Cytokines and alpha diversity, beta diversity (PCoA), and taxa"
+output: html_document
+date: "2025-03-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include = TRUE, echo = TRUE, message = FALSE, cache=FALSE, warning=FALSE, error = TRUE)
+```
+
+```{r}
+library(mia)
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(purrr)
+library(ggplot2)
+library(scater)
+library(vegan)
+library(ggthemes)
+library(extrafont)
+library(forestploter)
+library(factoextra)
+```
+
+Filter and clean data 
+```{r}
+# Define the data frame of individuals with at least one non-NA value of cytokine (no crp)
+
+  # Define the cytokines without the CRP 
+  cytokines_no_crp <- c("IL_1A", "IL_2RA", "IL_3", "IL_12_P40", "IL_16", "IL_18", 
+               "CTACK", "GROA", "HGF", "LIF", "MCP_3", "M_CSF", "MIF", 
+               "MIG", "B_NGF", "SCF", "SCGF_B", "SDF_1A", "TNF_B", 
+               "TRAIL", "IL_1B", "IL_1RA", "IL_2", "IL_4", "IL_5", 
+               "IL_6", "IL_7", "IL_8", "IL_9", "IL_10", "IL_12_P70", 
+               "IL_13", "IL_15", "IL_17", "EOTAXIN", "FGF_BASIC", 
+               "G_CSF", "GM_CSF", "IFN_G", "IP_10", "MCP_1_MCAF", 
+               "MIP_1A", "PDGF_BB", "MIP_1B", "RANTES", "TNF_A", "VEGF", "IFN_A2")
+
+   tse <- readRDS("tse_mgs-20241118_104759.rds") # Read TSE
+   col_data_df <- as.data.frame(colData(tse)) %>% filter(PROJECT == "FR02") # Remove FR07 
+
+  # Select individuals with at least one non-NA cytokine value
+    cytokines_df <- col_data_df [, cytokines_no_crp] 
+
+    cytokines_rownames <- cytokines_df %>% 
+    mutate(row_sum = (rowSums(cytokines_df, na.rm = TRUE))) %>%
+    filter(row_sum != 0) %>% 
+    rownames()
+  
+  # Subset tse by selected rownames and extract colData
+    tse_cyto_subset <- tse [,cytokines_rownames ]
+    cl_tse_cyto_subset <- as.data.frame(colData(tse_cyto_subset))
+
+  # Filter the colData; pregnant women, 1M antibiotics,  and low reads, and remove NA covars
+    cyto_data_rn <- cl_tse_cyto_subset %>%
+    filter((GRAVID == 1 | is.na(GRAVID)) & (BL_USE_RX_J01_1mo == 0) & (total_reads > 50000) & !is.na(CURR_SMOKE) & !is.na(PREVAL_DIAB) & !is.na(BMI) & !is.na(BL_AGE) & !is.na(MEN)) %>% 
+      rownames()
+    
+  # Subset tse by selected rownames and extract colData
+    tse_cyto <- tse[, cyto_data_rn]
+
+# Clean the colData
+
+  # Define all cytokines 
+  cytokines <- c("IL_1A", "IL_2RA", "IL_3", "IL_12_P40", "IL_16", "IL_18", 
+               "CTACK", "GROA", "HGF", "LIF", "MCP_3", "M_CSF", "MIF", 
+               "MIG", "B_NGF", "SCF", "SCGF_B", "SDF_1A", "TNF_B", 
+               "TRAIL", "IL_1B", "IL_1RA", "IL_2", "IL_4", "IL_5", 
+               "IL_6", "IL_7", "IL_8", "IL_9", "IL_10", "IL_12_P70", 
+               "IL_13", "IL_15", "IL_17", "EOTAXIN", "FGF_BASIC", 
+               "G_CSF", "GM_CSF", "IFN_G", "IP_10", "MCP_1_MCAF", 
+               "MIP_1A", "PDGF_BB", "MIP_1B", "RANTES", "TNF_A", "VEGF", "IFN_A2", "CRP")
+  
+  # Select relevant variables 
+  coldata <- as.data.frame(colData(tse_cyto)) %>% select (FID, BL_AGE, MEN, BMI, CURR_SMOKE, PREVAL_DIAB, cytokines, starts_with("DETECTABLE"))
+
+  # For CRP, replace <0.1 values with min/2 (0.05) and empty strings by NAs
+  coldata$CRP <- ifelse(coldata$CRP == "<0.1", 0.05, coldata$CRP)
+  coldata$CRP <- as.numeric(coldata$CRP)
+  
+  # Create DETECTABLE.CRP where 1 = measured, 2 = below detection level, NA = NA
+  coldata <- coldata %>% mutate(DETECTABLE.CRP = case_when(CRP == 0.05 ~ 2,
+                                                           is.na(CRP) ~ NA_real_, 
+                                                            TRUE ~ 1))
+```
+
+Proportion of missing cytokine values
+```{r}
+# Calculate the proportion of missing cytokine values
+
+  # Select DETECTABLE variable 
+  cyto_det <- coldata %>% select (starts_with("DETECTABLE"))
+
+  # Define function for calculating proportions based on Detectable variable 
+  calculate_percentage <- function(column) {
+  # Get counts of 1, 2, 3, and NA
+  counts <- table(factor(column, levels = c(1, 2, 3, NA), exclude = NULL))
+  # Calculate percentage
+  percent <- counts / length(column) * 100
+  return(percent)
+  }
+
+
+  # Apply the function to each column of the data set
+  percentages <- sapply(cyto_det, calculate_percentage) %>% as.data.frame() 
+
+
+  # Remove Detectable. from the name
+  colnames(percentages) <- gsub("DETECTABLE.", "", colnames(percentages))
+
+  # Transpose and clean table
+  percentages_clean <- percentages %>% t() %>%
+                            as.data.frame() %>% 
+                            arrange(desc(X1)) %>% 
+                            select(X1, NA., X2, X3) %>% 
+                            rename(
+                               "Detectable cytokines levels" = X1,
+                               "No recorded cytokine data" = NA., 
+                               "Below detection limit" = X2, 
+                               "Above detection limit" = X3
+                            ) %>% 
+                            rownames_to_column() %>% 
+                            rename (Cytokine = rowname)
+
+  knitr::kable(percentages_clean)
+  writexl::write_xlsx(percentages_clean, "SupTable1_Perc_of_NAs_cyto.xlsx")
+```
+
+Samples characteristics and cytokines means
+```{r}
+# Create sample characteristics table
+
+  # Fix formatting of binary variables 
+  coldata$CURR_SMOKE <- as.factor(coldata$CURR_SMOKE) 
+  coldata$PREVAL_DIAB <- as.factor(coldata$PREVAL_DIAB)
+  coldata$MEN <- as.factor(coldata$MEN)
+  
+  # Create table
+  Charc_table <- table1::table1 (~ BL_AGE + BMI + MEN + PREVAL_DIAB + CURR_SMOKE, data = coldata)
+  Charc_table
+
+# Create and process supp. table2 (cytokine means)
+  
+  # Remove three cytokines for having missing value more than 20%; IFN_A2, IL_15, MCP_3
+  cytokines_sel <- c("IL_1A", "IL_2RA", "IL_3", "IL_12_P40", "IL_16", "IL_18", 
+               "CTACK", "GROA", "HGF", "LIF", "M_CSF", "MIF", 
+               "MIG", "B_NGF", "SCF", "SCGF_B", "SDF_1A", "TNF_B", 
+               "TRAIL", "IL_1B", "IL_1RA", "IL_2", "IL_4", "IL_5", 
+               "IL_6", "IL_7", "IL_8", "IL_9", "IL_10", "IL_12_P70", 
+               "IL_13", "IL_17", "EOTAXIN", "FGF_BASIC", 
+               "G_CSF", "GM_CSF", "IFN_G", "IP_10", "MCP_1_MCAF", 
+               "MIP_1A", "PDGF_BB", "MIP_1B", "RANTES", "TNF_A", "VEGF","CRP")
+  
+  # Calculate the means of cytokines 
+  supptable2_cytokines <- tableone::CreateTableOne(cytokines_sel, data = coldata)
+  supptable2_cytokines <- as.data.frame (supptable2_cytokines[["ContTable"]][["Overall"]]) %>% 
+    rownames_to_column("Cytokine") %>% 
+    select(Cytokine, mean, sd, miss) %>% 
+    arrange(miss) %>% 
+    rename(Mean = mean, SD =sd, `Number of missing (unmeasured) cytokine values` = miss) %>% 
+    mutate(Mean = round(Mean, 3), SD = round(SD, 3))
+  
+  knitr::kable(supptable2_cytokines)
+  writexl::write_xlsx(supptable2_cytokines, "SupTable2_Means_cyto.xlsx")
+
+```
+
+
+Alpha diversity 
+```{r}
+# Run linear model for cytokines and Shannon's index
+
+  # Update colData of tse_cyto to include the two new CRP values 
+  coldata_sel <- coldata %>% select (FID, BL_AGE, MEN, BMI, CURR_SMOKE, PREVAL_DIAB, cytokines_sel)
+  SummarizedExperiment::colData(tse_cyto) <- S4Vectors::DataFrame(coldata_sel)
+  
+  # Agglomerate by Species
+  tse_cyto_sp <- agglomerateByRank(tse_cyto, rank = "Species", update.tree = TRUE)
+
+  # Get Shannon index
+  tse_cyto_sh <- addAlpha(
+  tse_cyto_sp,
+  assay.type = "counts",
+  index = "shannon",
+  name = "shannon"
+  )
+ 
+  # Extract colData, log-transform, and scale cytokines values 
+  coldata_sh <- as.data.frame(colData(tse_cyto_sh))
+  coldata_sh[cytokines_sel] <- log(coldata_sh[cytokines_sel])
+  coldata_sh[cytokines_sel] <- scale(coldata_sh[cytokines_sel])
+
+  # Run linear model 
+  lm_possibly <- purrr::possibly(lm)
+  Shannon_cyto <- tibble (Cytokines = c("IL_1A", "IL_2RA", "IL_3", "IL_12_P40", "IL_16", "IL_18", 
+               "CTACK", "GROA", "HGF", "LIF", "M_CSF", "MIF", 
+               "MIG", "B_NGF", "SCF", "SCGF_B", "SDF_1A", "TNF_B", 
+               "TRAIL", "IL_1B", "IL_1RA", "IL_2", "IL_4", "IL_5", 
+               "IL_6", "IL_7", "IL_8", "IL_9", "IL_10", "IL_12_P70", 
+               "IL_13", "IL_17", "EOTAXIN", "FGF_BASIC", 
+               "G_CSF", "GM_CSF", "IFN_G", "IP_10", "MCP_1_MCAF", 
+               "MIP_1A", "PDGF_BB", "MIP_1B", "RANTES", "TNF_A", "VEGF","CRP")) %>% 
+  mutate(formula = glue::glue("{Cytokines} ~ scale(shannon) + BL_AGE + MEN + BMI + CURR_SMOKE + PREVAL_DIAB")) %>% 
+  mutate(model = map(formula, ~ lm_possibly(as.formula (.x), data=coldata_sh))) %>%
+  filter(!is.null(model)) %>% 
+  mutate (tidy = map(model, ~ broom::tidy (.x))) %>% 
+  unnest (tidy) %>% 
+  filter(term == "scale(shannon)") %>% 
+  mutate (qvalue = p.adjust(p.value, method = "BH"))%>% 
+  select(-formula, -model)%>% 
+  arrange (qvalue) 
+  
+  saveRDS(Shannon_cyto, "Shannon_cyto.rds")
+  DT::datatable(Shannon_cyto)
+  writexl::write_xlsx(Shannon_cyto, "SupTable3_Shannon_cyto.xlsx")
+
+```
+
+
+Beta diversity (PCA)
+```{r}
+# Calculate beta diversity (PCA) and run linear model
+
+  # Transform assay to rela. abundance and clr
+  tse_cyto_sp <- transformAssay(tse_cyto_sp, assay.type = "counts", method = "relabundance")
+  tse_cyto_sp_clr <- transformAssay(tse_cyto_sp, assay.type = "relabundance", method = "clr", pseudocount = TRUE)
+ 
+  
+  # Run PCA
+  set.seed(15)
+  tse_cyto_rl <- runPCA(
+    tse_cyto_sp_clr,
+    ncomponents = 2,
+    assay.type = "clr",
+    name = "PCA")
+
+  # Extract PCoA and combine it with col Data
+  reduced_dims_df <- as.data.frame(reducedDim(tse_cyto_rl, "PCA"))
+  combined_PCA <- cbind(coldata_sh, reduced_dims_df) # combine col_data and PCoA
+
+  # Run linear model 
+  lm_possibly <- purrr::possibly(lm)
+  cytokines_sel <-  c("IL_1A", "IL_2RA", "IL_3", "IL_12_P40", "IL_16", "IL_18", 
+               "CTACK", "GROA", "HGF", "LIF", "M_CSF", "MIF", 
+               "MIG", "B_NGF", "SCF", "SCGF_B", "SDF_1A", "TNF_B", 
+               "TRAIL", "IL_1B", "IL_1RA", "IL_2", "IL_4", "IL_5", 
+               "IL_6", "IL_7", "IL_8", "IL_9", "IL_10", "IL_12_P70", 
+               "IL_13", "IL_17", "EOTAXIN", "FGF_BASIC", 
+               "G_CSF", "GM_CSF", "IFN_G", "IP_10", "MCP_1_MCAF", 
+               "MIP_1A", "PDGF_BB", "MIP_1B", "RANTES", "TNF_A", "VEGF","CRP")
+  axis <- c("PC1", "PC2")
+
+  beta_div_PCA <- expand.grid(Cytokines = cytokines_sel, axis = axis) %>% 
+  mutate(formula = glue::glue("{Cytokines} ~ scale({axis}) + BL_AGE + MEN + BMI + CURR_SMOKE + PREVAL_DIAB")) %>%
+  mutate(model= map(formula, ~ lm_possibly( as.formula (.x), data=combined_PCA))) %>%
+  filter(!is.null(model)) %>% 
+  mutate (tidy = map(model, ~ broom::tidy (.x))) %>% 
+  unnest (tidy) %>% 
+  filter(stringr::str_detect (term, "scale")) %>% 
+  mutate (qvalue = p.adjust(p.value, method = "BH"))%>% 
+  select (-model, -term, -formula) %>% 
+  arrange (qvalue) 
+
+  saveRDS(beta_div_PCA, "beta_div_PCA.rds")
+  DT::datatable(beta_div_PCA)
+  writexl::write_xlsx(beta_div_PCA, "SupTable4_PCA_cyto.xlsx")
+
+# Plot significant cytokines vs PCoA axis
+
+  # Combine reduced_dim with col data
+  combined_PCA_sig <- combined_PCA %>% select (PC1, PC2, CRP, MIP_1B, MIG) %>% rename("MIP-1B" = "MIP_1B")
+  combined_PCA_sig_long <- combined_PCA_sig %>% 
+pivot_longer(cols = c(CRP, `MIP-1B`, MIG), names_to = "Cytokine", values_to = "Cytokine_values") %>% rename(`Log cytokine value` = Cytokine_values) %>% 
+    filter(!is.na(`Log cytokine value`))
+  # Plot figure
+  PCA_vs_cytokine <- ggplot(combined_PCA_sig_long, aes (x = PC1, y = -PC2, color = `Log cytokine value`)) + scale_colour_gradient2(low = "blue", mid = "grey" ,high = "red", limits = c(-2, 2)) + 
+facet_wrap (~ Cytokine) + geom_point(size = 0.2, alpha = 0.9) + 
+  labs(x = "PC1 (9.6%)", y = "PC2 (7.7%)") +
+  { ggthemes::theme_tufte(base_family = "Arial", base_size = 12) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, family = "Arial"),
+          axis.text = element_text(colour = "black", size = 10, family = "Arial"),
+                   panel.border = element_rect(colour = "black", fill = NA),
+                   panel.background = element_rect(fill = "white", colour = "white"),
+                   plot.background = element_rect(fill = "white", colour = "white"),
+                   strip.text = element_text(hjust = 0, family = "Arial")
+                   ) } %>%
+  theme_set()
+
+PCA_vs_cytokine
+
+
+  #Save as image with dpi specified
+  png("Figure_1_PCA_cyto.png", width = 9, height = 3.25, units = "in", res = 600)
+  plot(PCA_vs_cytokine)
+  dev.off()
+```
+
+
+```{r} 
+
+# Extract loadings from reducedDim
+loadings <- as.data.frame(attr(reducedDim(tse_cyto_rl, "PCA"), "rotation")) %>% rownames_to_column("Species") 
+
+writexl::write_xlsx(loadings, "SupTable6_Loadings_cytokines.xlsx")
+
+# Subset by top 10 taxa with highest loading values
+loadings <- loadings %>% mutate (abs_PC1 = abs(PC1), abs_PC2 = abs(PC2))
+
+top_load_PC1 <- loadings %>% select(PC1, abs_PC1, Species) %>% arrange(desc(abs_PC1)) %>% head(10) %>% pivot_longer(cols = c(PC1, abs_PC1), names_to = "PC", values_to = "Values") %>% filter(PC == "PC1")
+
+top_load_PC2 <- loadings %>% select(PC2, abs_PC2, Species) %>% arrange(desc(abs_PC2)) %>% head(10) %>% pivot_longer(cols = c(PC2, abs_PC2), names_to = "PC", values_to = "Values") %>% filter(PC == "PC2") 
+
+#MULTIPLY PC2 loadings by -1 For visualization (IN THE MAIN PLOT PC2 IS ALSO *-1)
+top_load_PC2 <- top_load_PC2 %>% mutate(Values = -1*Values)
+
+
+combined_d <- rbind(top_load_PC1, top_load_PC2)
+rowData_df <- as.data.frame(rowData(tse_cyto_rl))
+
+combined_all <- inner_join(combined_d, rowData_df, by = "Species")
+
+plot1 <- ggplot(combined_all, aes(x = Values, y = Species, fill = Class)) + geom_bar(stat = "identity", width = 0.55, color = "black", size = 0.4) + facet_wrap(~ PC, scales = "free_y", ncol = 1) + labs(x = "Loadings") + scale_fill_manual(values = c("Clostridia_258483" = "#7AC5CD", "Bacilli" = "#8968CD", "Methanobacteria" = "#B4EEB4", "Gammaproteobacteria" = "#5F9EA0")) + 
+    { ggthemes::theme_tufte(base_family = "Arial", base_size = 12) + 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, family = "Arial"),
+          axis.text = element_text(colour = "black", size = 10, family = "Arial"),
+                   panel.border = element_rect(colour = "black", fill = NA),
+                   panel.background = element_rect(fill = "white", colour = "white"),
+                   plot.background = element_rect(fill = "white", colour = "white"),
+                   strip.text = element_text(hjust = 0, family = "Arial"),
+                   aspect.ratio = 1,
+                   legend.title = element_text(size = 10),
+                   legend.text = element_text(size = 10),
+                   legend.key.size = unit(0.77, "lines")) } %>%
+  theme_set()
+
+plot1
+
+  #Save as image with dpi specified
+  png("Figure_2_loadings_cytokines.png", width = 6, height = 4, units = "in", res = 250)
+  plot(plot1)
+  dev.off()
+
+```
+
+
+
+Taxa-level analysis 
+```{r}
+# Run linear model for species and cytokines 
+
+  # Subset by prevalence
+  tse_cyto_pr <- subsetByPrevalentFeatures(tse_cyto_sp, rank = "Species", assay.type = "relabundance", prevalence = 5/100, detection = 0.1/100) 
+
+  # clr-transform relative abundance
+  tse_cyto_pr <- transformAssay(tse_cyto_pr, assay.type = "relabundance", method = "clr", pseudocount = TRUE)
+  
+  # Combine clr with col_data 
+  assay_clr <- as.data.frame(t(assay(tse_cyto_pr, "clr")))
+  combined_clr_cyto <- cbind(coldata_sh, assay_clr)
+  
+  # Run linear model 
+  lm_possibly <- purrr::possibly(lm)
+  cytokines_sel <-  c("IL_1A", "IL_2RA", "IL_3", "IL_12_P40", "IL_16", "IL_18", 
+               "CTACK", "GROA", "HGF", "LIF", "M_CSF", "MIF", 
+               "MIG", "B_NGF", "SCF", "SCGF_B", "SDF_1A", "TNF_B", 
+               "TRAIL", "IL_1B", "IL_1RA", "IL_2", "IL_4", "IL_5", 
+               "IL_6", "IL_7", "IL_8", "IL_9", "IL_10", "IL_12_P70", 
+               "IL_13", "IL_17", "EOTAXIN", "FGF_BASIC", 
+               "G_CSF", "GM_CSF", "IFN_G", "IP_10", "MCP_1_MCAF", 
+               "MIP_1A", "PDGF_BB", "MIP_1B", "RANTES", "TNF_A", "VEGF","CRP")
+
+  Species <- colnames(assay_clr)
+
+  diff_taxa_sp <- expand.grid(Cytokines = cytokines_sel, Species = Species) %>% 
+  mutate(formula = glue::glue("{Cytokines} ~ scale(`{Species}`) + BL_AGE + MEN + BMI + CURR_SMOKE + PREVAL_DIAB")) %>%
+  mutate(model= map(formula, ~ lm_possibly(as.formula (.x), data=combined_clr_cyto))) %>%
+  filter(!is.null(model)) %>% 
+  mutate (tidy = map(model, ~ broom::tidy (.x, conf.int = TRUE))) %>% 
+  unnest (tidy) %>%
+  filter (grepl("scale", term)) %>% 
+  mutate (qvalue = p.adjust(p.value, method = "BH"))%>% 
+  select (-formula, -model) %>% 
+  arrange(qvalue)
+
+saveRDS(diff_taxa_sp, "diff_taxa_sp.rds")
+DT::datatable(diff_taxa_sp)
+writexl::write_xlsx(diff_taxa_sp, "SupTable7_Taxa_sp_cyto.xlsx")
+
+# Run linear model for genera and cytokines 
+
+  # Subset by prevalence
+
+  tse_cyto_rel <- transformAssay(tse_cyto, assay.type = "counts", method = "relabundance")
+  
+  tse_cyto_gn <- subsetByPrevalentFeatures(tse_cyto_rel, rank = "Genus", assay.type = "relabundance", prevalence = 5/100, detection = 0.1/100) 
+
+  # clr-transform relative abundance
+  tse_cyto_gn <- transformAssay(tse_cyto_gn, assay.type = "relabundance", method = "clr", pseudocount = TRUE)
+  
+  # Combine clr with col_data 
+  assay_clr_gn <- as.data.frame(t(assay(tse_cyto_gn, "clr")))
+  combined_clr_cyto_gn <- cbind(coldata_sh, assay_clr_gn)
+  
+  # Run linear model 
+  lm_possibly <- purrr::possibly(lm)
+  cytokines_sel <-  c("IL_1A", "IL_2RA", "IL_3", "IL_12_P40", "IL_16", "IL_18", 
+               "CTACK", "GROA", "HGF", "LIF", "M_CSF", "MIF", 
+               "MIG", "B_NGF", "SCF", "SCGF_B", "SDF_1A", "TNF_B", 
+               "TRAIL", "IL_1B", "IL_1RA", "IL_2", "IL_4", "IL_5", 
+               "IL_6", "IL_7", "IL_8", "IL_9", "IL_10", "IL_12_P70", 
+               "IL_13", "IL_17", "EOTAXIN", "FGF_BASIC", 
+               "G_CSF", "GM_CSF", "IFN_G", "IP_10", "MCP_1_MCAF", 
+               "MIP_1A", "PDGF_BB", "MIP_1B", "RANTES", "TNF_A", "VEGF","CRP")
+
+  Genus <- colnames(assay_clr_gn)
+
+  diff_taxa_gn <- expand.grid(Cytokines = cytokines_sel, Genus = Genus) %>% 
+  mutate(formula = glue::glue("{Cytokines} ~ scale(`{Genus}`) + BL_AGE + MEN + BMI + CURR_SMOKE + PREVAL_DIAB")) %>%
+  mutate(model= map(formula, ~ lm_possibly(as.formula (.x), data=combined_clr_cyto_gn))) %>%
+  filter(!is.null(model)) %>% 
+  mutate (tidy = map(model, ~ broom::tidy (.x, conf.int = TRUE))) %>% 
+  unnest (tidy) %>%
+  filter (grepl("scale", term)) %>% 
+  mutate (qvalue = p.adjust(p.value, method = "BH"))%>% 
+  select (-formula, -model) %>% 
+  arrange(qvalue)
+
+  saveRDS(diff_taxa_gn, "diff_taxa_gn.rds")
+  DT::datatable(diff_taxa_gn)
+  writexl::write_xlsx(diff_taxa_gn, "SupTable9_Taxa_gn_cyto.xlsx")
+```
+
+
+```{r}
+# Forest plot taxa vs cytokines 
+
+  # Rename genus column name to Taxon and add S_or_G column
+  diff_taxa_gn_flt <- diff_taxa_gn %>% filter (qvalue <= 0.05) %>% rename(Taxon = Genus) %>%  mutate(S_or_G = "Genus")
+
+  # Same for the species level results 
+  diff_taxa_sp_flt <- diff_taxa_sp %>% filter (qvalue <= 0.05) %>% rename(Taxon = Species) %>% mutate(S_or_G = "Species") 
+
+  # Combine two data frames (now that they have same colnames)
+  combined_data_tx <- rbind(diff_taxa_sp_flt, diff_taxa_gn_flt)
+  combined_data_tx$Taxon <- factor(combined_data_tx$Taxon, levels = rev(sort(unique(combined_data_tx$Taxon)))) # Re-order taxon column
+  combined_data_tx <- combined_data_tx %>% 
+                      rename(Cytokine = Cytokines) %>% 
+                      mutate(Cytokine = recode(Cytokine, "MIP_1B" = "MIP-1B", "G_CSF" = "G-CSF"))
+ 
+
+  # Plot the forest plot
+  data <- combined_data_tx  %>% mutate(std.error = round(std.error, 3), qvalue = round(qvalue, 3))
+
+  # Create HR (95% CI) column 
+  data$`Estimate (95% CI)` <- ifelse(is.na(data$estimate), "",
+                             sprintf("%.2f (%.2f to %.2f)",
+                                     data$estimate, data$conf.low, data$conf.high))
+
+  # Reorder the needed variables 
+  data <- data %>% select(Taxon, Cytokine, `Estimate (95% CI)`, estimate, std.error, conf.low, conf.high, qvalue)
+
+  # Create an empty column for the forest plot to display CI.
+  data$` ` <- paste(rep(" ", 15), collapse = " ")
+
+  # Convert cytokines and taxon to character 
+  data$Taxon <- as.character(data$Taxon)
+  data$Cytokine <- as.character(data$Cytokine)
+
+  # Add spaces before the taxon names
+  data$Taxon <- paste0("     ", data$Taxon)
+
+  # Create new rows for groups "Species" and "Genus" 
+  new_row_s <- c(Taxon = "Species", Cytokine = " ", `Estimate (95% CI)` = " ", estimate = NA, 
+             std.error = NA, conf.low = NA, conf.high = NA, qvalue = " ", ` ` = " ")
+  new_row_g <- c(Taxon = "Genus", Cytokine = " ", `Estimate (95% CI)` = " ", estimate = NA, 
+             std.error = NA, conf.low = NA, conf.high = NA, qvalue = " ", ` ` = " ")
+
+  # Add the new row to the data frame
+  data <- rbind(data, new_row_s, new_row_g)
+
+  # Convert to numeric 
+  data$std.error <- as.numeric (data$std.error)
+  data$estimate <- as.numeric(data$estimate)
+  data$conf.low <- as.numeric(data$conf.low)
+  data$conf.high <- as.numeric(data$conf.high)
+
+  # Rename qvalue to FDR
+  data <- data %>% rename("FDR-P" = qvalue)
+
+  # Re-order the rows
+  data <- data[c(14, 1:8, 15, 9:13), ]
+
+  # Plot 
+  tm <- forest_theme(base_size = 12,
+                   # Confidence interval point shape, line type/color/width
+                   ci_pch = 15,
+                   ci_col = "black",
+                   ci_fill = "black",
+                   ci_alpha = 1,
+                   ci_lty = 1,
+                   ci_lwd = 1,
+                   ci_Theight = 0.2,
+                   core=list(bg_params=list(fill = c("grey97", "white"))))
+  
+  forest_plot_tx <- forest(data[, c(1,2, 3, 9, 8)],
+            est = data$estimate,
+            lower = data$conf.low, 
+            upper = data$conf.high,
+            sizes = 0.2,
+            ci_column = 4, 
+            ref_line = 0,
+            xlim = c(-0.15, 0.15),
+            ticks_at = c(-0.075, 0, 0.075),
+            theme = tm, 
+            xlab = "Estimate",
+            )
+
+  forest_plot_tx
+
+  #Save as image with dpi specified
+  png("Figure_3_fplot_cytokines.png", width = 8.3, height = 4.7, units = "in", res = 250)
+  plot(forest_plot_tx)
+  dev.off()
+  
+```
+
+
