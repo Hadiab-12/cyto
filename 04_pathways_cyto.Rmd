@@ -159,9 +159,16 @@ filter_sp_pr <- filter_sp.10 %>%
 colnames(filter_sp_pr) <- filter_sp_pr[1,]
 # Remove extra row
 filter_sp_pr <- filter_sp_pr[-1, ] 
-# Change from character to numeric
+# Change from character to numeric ## IN THE SUBMITTED CODE THIS IS REMOVED BECAUSE WE DID THE ANALYSIS FOR ALL PATHWAYS SO WE DID NOT FILTER FOR THE SIGNIFICANT ONES ONLY
 filter_sp_pr <- filter_sp_pr %>% mutate_if(is.character, as.numeric) %>%
-  tibble::rownames_to_column("Barcode") 
+  tibble::rownames_to_column("Barcode") %>% select(Barcode, contains("Allobacillus_sp007559425"), 
+                                                   contains("Bacteroides_thetaiotaomicron"),
+                                                   contains("Dysosmobacter_welbionis"),
+                                                   contains("Sellimonas_intestinalis"),
+                                                   contains("Ruminococcus_gnavus"),
+                                                   contains("Alistipes_senegalensis"),
+                                                   contains("Gemmiger_qucibialis"),
+                                                   contains("Flavonifractor_plautii"))
 ```
 
 ```{r}
@@ -265,4 +272,7 @@ Pathway_fun_LM_inv_rank <- expand.grid(cytokines = cytokines, Pathways = Pathway
 saveRDS(Pathway_fun_LM_inv_rank, "Pathway_inv_rank_cyto.rds")
 writexl::write_xlsx(Pathway_fun_LM_inv_rank, "SupTable12_Pathway_inv_rank_cyto.xlsx")
 ```
+
+
+
 
