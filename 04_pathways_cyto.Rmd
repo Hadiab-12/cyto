@@ -159,7 +159,7 @@ filter_sp_pr <- filter_sp.10 %>%
 colnames(filter_sp_pr) <- filter_sp_pr[1,]
 # Remove extra row
 filter_sp_pr <- filter_sp_pr[-1, ] 
-# Change from character to numeric ## IN THE SUBMITTED CODE THIS IS REMOVED BECAUSE WE DID THE ANALYSIS FOR ALL PATHWAYS SO WE DID NOT FILTER FOR THE SIGNIFICANT ONES ONLY
+# Change from character to numeric and filter for sig taxa pathways
 filter_sp_pr <- filter_sp_pr %>% mutate_if(is.character, as.numeric) %>%
   tibble::rownames_to_column("Barcode") %>% select(Barcode, contains("Allobacillus_sp007559425"), 
                                                    contains("Bacteroides_thetaiotaomicron"),
