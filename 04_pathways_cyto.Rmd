@@ -15,6 +15,8 @@ library(tibble)
 library(tidyr)
 library(readr)
 library(purrr)
+library(stringr)
+library(forestploter)
 ```
 
 ```{r}
@@ -209,7 +211,7 @@ Pathway_fun_LM_dicho <- expand.grid(cytokines = cytokines, Pathways = Pathways)%
   mutate(formula = glue::glue("{cytokines} ~ scale(`{Pathways}`) + BL_AGE + MEN + BMI + CURR_SMOKE + PREVAL_DIAB")) %>%
   mutate(model= map(formula, ~ lm_possibly( as.formula (.x), data=df_dicho))) %>%
   filter(!is.null(model)) %>% 
-  mutate (tidy = map(model, ~ broom::tidy (.x))) %>% 
+  mutate (tidy = map(model, ~ broom::tidy (.x, conf.int = TRUE))) %>% 
   unnest (tidy) %>%
   filter (grepl("scale", term)) %>% 
   select (-model, -formula, -term) %>% 
@@ -262,7 +264,7 @@ Pathway_fun_LM_inv_rank <- expand.grid(cytokines = cytokines, Pathways = Pathway
   mutate(formula = glue::glue("{cytokines} ~ scale(`{Pathways}`) + BL_AGE + MEN + BMI + CURR_SMOKE + PREVAL_DIAB")) %>%
   mutate(model= map(formula, ~ lm_possibly( as.formula (.x), data = df_inv_rank))) %>%
   filter(!is.null(model)) %>% 
-  mutate (tidy = map(model, ~ broom::tidy (.x))) %>% 
+  mutate (tidy = map(model, ~ broom::tidy (.x, conf.int = TRUE))) %>% 
   unnest (tidy) %>%
   filter (grepl("scale", term)) %>% 
   select (-model, -formula, -term) %>% 
@@ -273,6 +275,135 @@ saveRDS(Pathway_fun_LM_inv_rank, "Pathway_inv_rank_cyto.rds")
 writexl::write_xlsx(Pathway_fun_LM_inv_rank, "SupTable12_Pathway_inv_rank_cyto.xlsx")
 ```
 
+Pathways figure
+```{r}
 
+Sig_path_dm <- Pathway_fun_LM_dicho %>% filter (qvalue < 0.05) %>% mutate (Transformation = "Dichotomous")
+Sig_path_inv <- Pathway_fun_LM_inv_rank %>% filter (qvalue <0.05) %>% mutate (Transformation = "Inverse-rank")
+
+Sig_path <- rbind(Sig_path_dm, Sig_path_inv)
+
+# Forest plot
+
+# Select pathways with q value less than 0.05 and round std error and qvalue
+Sig_path <- Sig_path  %>% mutate(qvalue = round(qvalue, 3))
+
+# Create HR (95% CI) column 
+Sig_path$`Estimate (95% CI)` <- ifelse(is.na(Sig_path$estimate), "",
+                             sprintf("%.2f (%.2f to %.2f)",
+                                     Sig_path$estimate, Sig_path$conf.low, Sig_path$conf.high))
+
+
+
+# Create an empty column for the forest plot to display CI.
+Sig_path$` ` <- paste(rep(" ", 15), collapse = " ")
+
+
+# Clean the pathways variable  
+Sig_path$Pathways <- gsub("g__Bacteroides.s__Bacteroides_thetaiotaomicron|.*:|\\|", "", Sig_path$Pathways)
+
+Sig_path$Pathways <- str_trim(Sig_path$Pathways) #Remove space before
+
+
+
+# Capitalize pathways 
+Sig_path_1 <- Sig_path %>% 
+  rename("FDR-P" = "qvalue", "Cytokines" = "cytokines") %>% 
+  mutate(Pathways = case_when(
+    Pathways == "inosine-5'-phosphate biosynthesis I" ~ "Inosine-5'-phosphate biosynthesis I",
+    Pathways == "inosine-5'-phosphate biosynthesis II" ~ "Inosine-5'-phosphate biosynthesis II", 
+    Pathways == "superpathway of 5-aminoimidazole ribonucleotide biosynthesis" ~ "Superpathway of 5-aminoimidazole ribonucleotide biosynthesis", TRUE ~ Pathways  
+  ))
+                    
+# Add space after pathways
+Sig_path_1$Pathways <- paste0("   ", Sig_path_1$Pathways, "   ")
+Sig_path_1 <- Sig_path_1 %>% select(-std.error, 
+                                    -p.value, 
+                                    -statistic)
+
+# Create new rows for function groups 
+
+new_row_a <- c(Cytokine = NA, 
+               Pathways = "Amino acid degradation", 
+               estimate = NA, 
+               conf.low = NA, 
+               conf.high = NA, 
+               "FDR-P" = " ", 
+               Transformation = " ",
+               `Estimate (95% CI)` = " ",
+               ` ` = " ")
+new_row_p <- c(Cytokine = NA,
+               Pathways = "Purine synthesis", 
+               estimate = NA, 
+               conf.low = NA,
+               conf.high = NA,
+               "FDR-P" = " ",
+               Transformation = " ",
+               `Estimate (95% CI)` = " ",
+               ` ` = " ")
+
+
+
+# Add the new row to the data frame
+Sig_path_11 <- rbind(Sig_path_1,
+                      new_row_a,
+                      new_row_p)
+
+# Convert to numeric 
+Sig_path_11$estimate <- as.numeric(Sig_path_11$estimate)
+Sig_path_11$conf.low <- as.numeric(Sig_path_11$conf.low)
+Sig_path_11$conf.high <- as.numeric(Sig_path_11$conf.high)
+
+# Add space before FDR-P 
+Sig_path_11$"FDR-P" <- paste0("   ", Sig_path_11$"FDR-P")
+
+# Re-order pathways names 
+new_order <- c("Amino acid degradation",
+               "   L-histidine degradation I   ",
+               "Purine synthesis",
+               "   Inosine-5'-phosphate biosynthesis I   ",
+               "   Inosine-5'-phosphate biosynthesis II   ",
+               "   5-aminoimidazole ribonucleotide biosynthesis II   ",
+               "   Superpathway of 5-aminoimidazole ribonucleotide biosynthesis   ")
+
+Sig_path_11$Pathways <- factor(Sig_path_11$Pathways, levels = new_order)
+Sig_path_11 <- Sig_path_11[order(Sig_path_11$Pathways), ]
+
+# Forest plot theme
+ tm <- forest_theme(base_size = 12,
+                   ci_pch = 15,
+                   ci_col = "black",
+                   ci_fill = "black",
+                   ci_alpha = 1,
+                   ci_lty = 1,
+                   ci_lwd = 1,
+                   ci_Theight = 0.2,
+                   core=list(bg_params=list(fill = c("grey97", "white"))))
+                   
+                   
+forest_plot_p <- forest(Sig_path_11[, c(2,7, 8,9,6)],
+            est = Sig_path_11$estimate,
+            lower = Sig_path_11$conf.low, 
+            upper = Sig_path_11$conf.high,
+            sizes = 0.3,
+            ci_column = 4, 
+            ref_line = 0,
+            xlim = c(-0.025, 0.13),
+            ticks_at = c(0,0.05,0.1),
+            theme = tm, 
+            xlab = "Estimate",
+            )
+
+forest_plot_p
+
+
+#Save as image with dpi specified
+
+ggplot2::ggsave("Figure2S_cyto.png", forest_plot_p, width = 10.25, height = 2.8, units = "in", dpi = 350)
+
+
+
+```
+```
 
 

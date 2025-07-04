@@ -483,6 +483,38 @@ DT::datatable(diff_taxa_sp)
 writexl::write_xlsx(diff_taxa_sp, "SupTable7_Taxa_sp_cyto.xlsx")
 ```
 
+
+```{r}
+heatmap_data <- diff_taxa_sp [1:25, ] %>% 
+                select(Cytokines, Species, estimate) %>% 
+                mutate(Species = case_when(
+                  Species == "Allobacillus sp007559425" ~ "Allobacillus sp007559425*",
+                  Species == "Bacteroides_H thetaiotaomicron" ~ "Bacteroides_H thetaiotaomicron*",
+                  Species == "Dysosmobacter welbionis" ~ "Dysosmobacter welbionis*",
+                  Species == "Sellimonas intestinalis" ~ "Sellimonas intestinalis*",
+                  Species == "Ruminococcus_B gnavus" ~ "Ruminococcus_B gnavus*",
+                  Species == "Alistipes_A_871400 senegalensis" ~ "Alistipes_A_871400 senegalensis*",
+                  Species == "Gemmiger_A_73129 qucibialis" ~ "Gemmiger_A_73129 qucibialis*",
+                  Species == "Flavonifractor plautii" ~ "Flavonifractor plautii*",
+                  TRUE ~ Species
+                ))
+
+pl <- ggplot(heatmap_data, aes(x = Species, y = Cytokines, fill = estimate)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(
+    low = "blue", high = "red", mid = "white",
+    midpoint = 0, limit = c(min(heatmap_data$estimate), max(heatmap_data$estimate)),
+    name = "Estimate"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+pl
+
+ggsave("Figure3S_cyto.png", plot = pl, dpi = 350,
+                width = 7.95, height = 5.8, units = "in" )
+```
+
 Sensitivity analysis (Subgroup + additional covars)
 ```{r}
 sig_taxa <- c("Allobacillus sp007559425", 
@@ -846,23 +878,23 @@ digraph finrisk_flowchart {
   graph [layout = dot, rankdir = TB]
 
   node [shape = roundrect, style = rounded, fontname = Arial]
-  
+
   # Main flow nodes
-  A [label = 'FINRISK 2002 cohort n=13,437', fillcolor = none]
-  B [label = 'Agreed to participate n=8,799', fillcolor = none]
-  C [label = 'Donated fecal sample n=7,054', fillcolor = none]
-  D [label = 'Participants with cytokines data n=2,501', fillcolor = none]
-  E [label = 'Participants with no missing data on covariates n=2,484', fillcolor = none]
-  F [label = 'Participants with > 50,000 reads n=2,481', fillcolor = none]
-  G [label = 'Final study sample n=2,398', fillcolor = none]
+  A [label = 'FINRISK 2002 cohort n=13,437']
+  B [label = 'Agreed to participate n=8,799']
+  C [label = 'Donated fecal sample n=7,054']
+  D [label = 'With cytokines data n=2,501']
+  E [label = 'With no missing covariates n=2,484']
+  F [label = 'With > 50,000 reads n=2,481']
+  G [label = 'Final study sample n=2,398']
 
   # Exclusion nodes
-  E0 [label = 'Did not agree to participate n=4,638', fillcolor = none]
-  E1 [label = 'Did not donate fecal sample n=1,745', fillcolor = none]
-  E2 [label = 'No cytokines data n=4,553', fillcolor = none]
-  E3 [label = 'Missing covariate data n=17', fillcolor = none]
-  E4 [label = '<50,000 reads n=3', fillcolor = none]
-  E5 [label = 'Recent antibiotic use n=83', fillcolor = none]
+  E0 [label = 'Did not agree to participate n=4,638']
+  E1 [label = 'Did not donate fecal sample n=1,745']
+  E2 [label = 'No cytokines data n=4,553']
+  E3 [label = 'Missing covariate data n=17']
+  E4 [label = '<50,000 reads n=3']
+  E5 [label = 'Recent antibiotic use n=83']
 
   # Main flow edges
   A -> B
@@ -871,7 +903,6 @@ digraph finrisk_flowchart {
   D -> E
   E -> F
   F -> G
-  
 
   # Exclusion edges
   A -> E0 [style = filled, color = black]
@@ -880,12 +911,19 @@ digraph finrisk_flowchart {
   D -> E3 [style = filled, color = black]
   E -> E4 [style = filled, color = black]
   F -> E5 [style = filled, color = black]
+
+  # Rank same for exclusion nodes to keep main flow aligned
+  {rank = same; A; E0}
+  {rank = same; B; E1}
+  {rank = same; C; E2}
+  {rank = same; D; E3}
+  {rank = same; E; E4}
+  {rank = same; F; E5}
 }
 ")
+
 svg <- export_svg(flow)
-
-rsvg_png(charToRaw(svg), file = "C:/Users/hadiab/Documents/cytokines/Figure1_cyto.png", width = 2000, height = 1000)
-
+rsvg_png(charToRaw(svg), file = "C:/Users/hadiab/Documents/cytokines/Figure1_cyto.png", width = 1000, height = 1100)
 
 
 ```
