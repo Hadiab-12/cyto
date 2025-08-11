@@ -765,9 +765,6 @@ writexl::write_xlsx(combined_sens_results, "combined_sens_results.xlsx")
 clean_col <- cl_tse_cyto_subset [cyto_data_rn,]
 add_covars <- clean_col %>% select(BL_USE_RX_A02BC, TULOT, KOULGR,ALKI2_FR02, Q57X,FID, ALUE) %>% filter(!is.na(BL_USE_RX_A02BC) & !is.na(TULOT) & !is.na(ALKI2_FR02) & !is.na(Q57X) & !is.na(KOULGR) & !is.na(ALUE)) %>% inner_join(combined_clr_cyto, by="FID")
 
-add_covars$TULOT <- as.factor(add_covars$TULOT)
-add_covars$KOULGR <- as.factor(add_covars$KOULGR)
-add_covars$Q57X <- as.factor(add_covars$Q57X)
 add_covars$ALUE <- as.factor(add_covars$ALUE)
   
 diff_taxa_add_covars <- expand.grid(Cytokines = sig_cytokines, Species = sig_taxa) %>% 
@@ -785,7 +782,7 @@ diff_taxa_add_covars <- expand.grid(Cytokines = sig_cytokines, Species = sig_tax
          Cytokines == "CRP" & Species == "Ruminococcus_B gnavus" |
          Cytokines == "CTACK" & Species == "Alistipes_A_871400 senegalensis" |
          Cytokines == "G_CSF" & Species == "Gemmiger_A_73129 qucibialis" |
-         Cytokines == "CRP" & Species == "Flavonifractor plautii"  ) %>% 
+         Cytokines == "CRP" & Species == "Flavonifractor plautii") %>% 
   arrange(p.value) 
 
 writexl::write_xlsx(diff_taxa_add_covars, "additional_covars.xlsx")
