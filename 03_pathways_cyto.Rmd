@@ -84,7 +84,7 @@ library(forestploter)
 
 ```{r}
 # Functional pathways from metaCyc
-joined_pathabundance <- read_delim("C:/Users/hadiab/Documents/cytokines/joined_pathabundance.tsv", 
+joined_pathabundance <- read_delim("joined_pathabundance.tsv", 
                                    delim = "\t", escape_double = FALSE, trim_ws = TRUE)
 
 # Matching sampleID from functional data to metadata
@@ -403,7 +403,6 @@ ggplot2::ggsave("Figure2S_cyto.png", forest_plot_p, width = 10.25, height = 2.8,
 
 
 
-```
 ```
 
 

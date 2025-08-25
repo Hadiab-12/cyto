@@ -925,7 +925,7 @@ digraph finrisk_flowchart {
 ")
 
 svg <- export_svg(flow)
-rsvg_png(charToRaw(svg), file = "C:/Users/hadiab/Documents/cytokines/Figure1_cyto.png", width = 1000, height = 1100)
+rsvg_png(charToRaw(svg), file = "Figure1_cyto.png", width = 1000, height = 1100)
 
 
 ```
